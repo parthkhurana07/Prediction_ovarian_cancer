@@ -1,0 +1,773 @@
+---
+title: "Predictive Analysis of Ovarian Cancer"
+author: "Parth Khurana"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_notebook: default
+  html_document:
+    df_print: paged
+---
+## Introduction
+
+This project delves into the Ovarian Cancer dataset from Kaggle to classify types of ovarian cancer using biomarkers. With 349 cases and 51 variables, the goal is to distinguish between Benign Tumor and Ovarian Cancer, which is vital for early and accurate diagnosis.
+
+The classification nature of this task has led me to select Support Vector Machine (SVM), k-Nearest Neighbors (kNN), and Logistic Regression for their strengths in pattern recognition and interpretability. Logistic Regression, in particular, is chosen for its clarity in binary outcomes, contrasting with the commonly used Decision Trees.
+
+Feature engineering will play a critical role in preparing the dataset, aiming to enhance model performance through normalization, missing value treatment, and feature selection.
+
+The effectiveness of these models will be quantified by accuracy, precision, recall, and F1 scores, alongside a confusion matrix for in-depth analysis. This approach seeks to provide a fresh perspective on the application of Logistic Regression in medical diagnostics, setting it apart from previous studies.
+
+Data Source - https://www.kaggle.com/datasets/saurabhshahane/predict-ovarian-cancer
+
+## Installing and Loading Packages
+
+Install the required packages and load the libraries.
+
+```{r, message=FALSE, warning=FALSE}
+# install.packages("httr")
+library(httr)
+# install.packages("readxl")
+library(readxl)
+# install.packages("tidyverse")
+library(tidyverse)
+# install.packages("ggplot2")
+library(ggplot2)
+# install.packages("psych")
+library(psych)
+# install.packages("GGally")
+library(GGally)
+# install.packages("dplyr")
+library(dplyr)
+# install.packages("kernlab")
+library(kernlab)
+# install.packages("class")
+library(class)
+# install.packages("gmodels")
+library(gmodels)
+# install.packages("pROC")
+library(pROC)
+# install.packages("caret")
+library(caret)
+# install.packages("randomForest")
+library(randomForest)
+# install.packages("kableExtra")
+library(kableExtra)
+# install.packages("knitr")
+library(knitr)
+# install.packages("gridExtra")
+library(gridExtra)
+# install.packages("e1071")
+library(e1071)
+# install.packages("glmnet")
+library(glmnet)
+```
+
+## Loading and Exploring the Dataset
+
+Using Kaggle API to download the the ovarian cancer dataset.
+
+```{bash}
+pip install kaggle
+kaggle datasets download -d saurabhshahane/predict-ovarian-cancer --force
+```
+
+Bash command was used to load the zip file in the environment. Now, we can begin exploring the dataset.
+
+```{r, warning=FALSE}
+# Load the dataset
+extract_file <- unzip("predict-ovarian-cancer.zip", exdir = ".")
+oc_df <- read_excel(extract_file[1])
+
+# Summary of data
+summary_oc_df <- summary(oc_df)
+
+# First few rows of the data
+first_few_rows <- head(oc_df)
+
+# Removing non-numeric values
+oc_df$SUBJECT_ID <- NULL
+oc_df$AFP <- NULL
+oc_df$CA125 <- NULL
+oc_df$`CA19-9` <- NULL
+```
+
+The zip files was unzipped and its first file was extracted as our datframe which is name *oc_df*.
+
+The ovarian cancer dataframe has `r nrow(oc_df)` rows and `r ncol(oc_df)` columns. The structure of this dataframe can be viewed below:
+
+```{r, echo=FALSE}
+print(str(oc_df))
+```
+
+The first few rows of the dataframe can be viewed below:
+
+```{r, echo=FALSE}
+print(head(oc_df))
+```
+
+The Non-Numeric columns were also removed from the dataframe for a cleaner analysis.
+
+## Data Exploration
+
+Here we view some exploratory data plots of our data.
+
+```{r, warning=FALSE}
+
+# Distribution of Type of Ovarian Cancer in the Dataset
+binary_distribution <- ggplot(oc_df, aes(x = TYPE)) + 
+    geom_bar() +
+    labs(title = "Distribution of Type of Ovarian Cancer in the Dataset", x = "Type(Benign/Malignant)", y = "Count") +
+    theme_classic()
+
+# Boxplots for all continuous variables
+boxplot_first_few_cols <- oc_df %>% 
+  select_if(is.numeric) %>% 
+  select(1:5) %>%
+  gather() %>% 
+  ggplot(aes(key, value)) +
+  geom_boxplot() + 
+  coord_flip()
+
+cor_matrix <- cor(oc_df, use = "complete.obs")
+```
+
+**Bar Graph to show the Distribution of Benign and Malignant Tumors**
+
+```{r, echo=FALSE}
+binary_distribution
+```
+
+Our positive and negative class is almost equally distributed
+
+**Boxplot of First 5 Columns**
+
+```{r, warning=FALSE, echo=FALSE}
+boxplot_first_few_cols
+```
+
+
+We can see some outliers in our data, this means we need to do perform outlier imputation for our columns.
+
+**Heat Map of Correlation**
+
+```{r, echo=FALSE}
+heatmap(cor_matrix, main = "Correlation Matrix Heatmap", Colv = NA, Rowv = NA, scale = "none", 
+        margins = c(5, 5), cexRow = 0.5, cexCol = 0.5)
+```
+
+
+## Feature Engineering
+
+This section covers data preprocessing including handling missing values, imputing missing data, and normalizing the data.
+
+### Missing Values
+```{r Handling Missing Values, warning=FALSE}
+# Missing Values
+anyNA(oc_df)
+
+# Imputing missing values
+for (col in names(oc_df)) {
+  if (is.numeric(oc_df[[col]])) {
+    oc_df[[col]][is.na(oc_df[[col]])] <- mean(oc_df[[col]], na.rm = TRUE)
+  }
+}
+```
+
+Here we impute missing values with the mean for numeric columns.
+
+### Histograms Before Normalization
+
+```{r Histogram Before Normalization, warning=FALSE}
+oc_df_clean <- oc_df
+
+## Histogram before normalization
+# First, select the first five numeric columns
+oc_df_numeric <- oc_df_clean %>% 
+  select_if(is.numeric) %>% 
+  select(1:5)
+
+# Now, create histograms for these columns
+plot_list <- lapply(names(oc_df_numeric), function(col_name) {
+    ggplot(oc_df_numeric, aes_string(x = col_name)) + 
+      geom_histogram(aes(y = ..density..), bins = 30) + 
+      geom_density() +
+      ggtitle(paste("Histogram of", col_name))
+})
+
+grid.arrange(grobs = plot_list, nrow = 3, ncol = 2)
+```
+
+Visualizing the distribution of the first five numeric columns before normalization. We can see that the data is not normally distributed.
+
+### Outlier Treatment
+
+```{r Outliers, warning=FALSE}
+# Loop over each column in the data frame
+for(colname in names(oc_df_clean)) {
+  # Check if the column is numeric
+  if(is.numeric(oc_df_clean[[colname]])) {
+    # Calculate the mean and standard deviation, excluding NA values
+    column_mean <- mean(oc_df_clean[[colname]], na.rm = TRUE)
+    column_sd <- sd(oc_df_clean[[colname]], na.rm = TRUE)
+    
+    # Define the cutoff for outliers (e.g., 3 standard deviations from the mean)
+    cutoff <- 3 * column_sd
+    
+    # Identify outliers
+    outliers <- (oc_df_clean[[colname]] < (column_mean - cutoff)) | 
+                (oc_df_clean[[colname]] > (column_mean + cutoff))
+    
+    # Replace outliers with the mean
+    oc_df_clean[[colname]][outliers] <- column_mean
+  }
+}
+```
+
+
+Removing outliers by replacing them with the mean because with our smaller dataset it is important to keep the number of rows as much as we can. 
+
+### Normalization and Histograms After Normalization
+
+```{r Normalization}
+## Applying Min-Max Normalization
+oc_df_final <- as.data.frame(lapply(oc_df_clean, function(x) (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))))
+
+## Histogram after normalization
+# First, select the first five numeric columns
+oc_df_numeric_2 <- oc_df_final %>% 
+  select_if(is.numeric) %>% 
+  select(1:5)
+
+# Now, create histograms for these columns
+plot_list <- lapply(names(oc_df_numeric_2), function(col_name) {
+    ggplot(oc_df_numeric_2, aes_string(x = col_name)) + 
+      geom_histogram(aes(y = ..density..), bins = 30) + 
+      geom_density() +
+      ggtitle(paste("Histogram of", col_name))
+})
+
+
+grid.arrange(grobs = plot_list, nrow = 3, ncol = 2)
+```
+
+Normalizing the data with min-max normalization and viewing the histograms of the normalized data.
+
+### Principal Component Analysis
+
+```{r}
+# PCA
+pca_result <- prcomp(oc_df_final, center = TRUE, scale. = TRUE)
+summary(pca_result)
+```
+
+Principal Component Analysis (PCA) is a statistical technique used in data analysis for dimensionality reduction while preserving as much of the data's variation as possible.
+
+From the analysis of summary of PCA results, we can see that our data can be explained by top 3-4 principal components. We can further visualize this variance using a scree plot.
+
+```{r PCA Scree Plot, warning=FALSE}
+var_explained <- data.frame(PC = 1:length(pca_result$sdev), 
+                            Variance = pca_result$sdev^2 / sum(pca_result$sdev^2))
+
+# Scree plot of variances
+scree_plot <- ggplot(var_explained, aes(x = PC, y = Variance)) +
+  geom_line() + 
+  geom_point() + 
+  theme_minimal() +
+  labs(x = "Principal Component", y = "Proportion of Variance Explained")
+
+# Print the scree plot
+print(scree_plot)
+```
+As interpreted earlier, there is a steep decrease in the variance after the 4th principal component.
+
+Four our dataset, since the interpretation of the outcome is of high importance, i.e. whether our outcome is a benign tumor or a malignant tumor, it is important to keep the orginial columns and discard the principal components.
+
+## Feature Selection
+
+Feature selection is done to improve model performance by reducing overfitting, enhancing generalization, and speeding up computation by eliminating irrelevant or redundant features from the data.
+
+```{r}
+numeric_columns <- oc_df_final[sapply(oc_df_final, is.numeric)]
+
+feature_correlations <- sapply(oc_df_final, function(x) abs(cor(x, oc_df_final$TYPE, use = "complete.obs")))
+
+sorted_features <- sort(feature_correlations, decreasing = TRUE)
+
+top_25_features <- names(sorted_features)[1:25]
+
+oc_df_final <- oc_df_final[, top_25_features]
+```
+
+Performed feature selection based on the correlation of numeric features with the target variable TYPE in your dataset oc_df_final. Created a new dataset oc_df_final that includes only the top 25 features. This step focuses the modeling process on the most relevant features, potentially improving model accuracy.
+
+The top 25 features as follows:
+
+`r top_25_features`
+
+## Creating training and test datasets
+
+The primary purpose of splitting data into training and test sets is to evaluate the performance of a model. The model is trained on the training set and then evaluated on the unseen test set. This process helps in assessing how well the model generalizes to new, unseen data.
+
+```{r, message=FALSE}
+# Set a seed for reproducibility
+set.seed(123)
+
+# Create a train/test split of 70%/30%
+split <- createDataPartition(oc_df_final$TYPE, p = 0.7, list = FALSE)
+
+# Create the training and test sets
+train_set <- oc_df_final[split, ]
+test_set <- oc_df_final[-split, ]
+```
+
+Used the 'Caret' package to create data partition. 70% of the data is training set where as 30% of the data is test set.
+
+## Support Vector Machine Model
+
+
+Support Vector Machine (SVM) is a supervised machine learning algorithm that finds the hyperplane which best separates different classes in a feature space with the maximum margin.
+
+```{r}
+# Convert TYPE to a factor 
+train_set$TYPE <- as.factor(train_set$TYPE)
+test_set$TYPE <- as.factor(test_set$TYPE)
+
+# Fit SVM model for classification
+model_svm <- ksvm(TYPE ~ ., data = train_set, kernel = "rbfdot", prob.model = TRUE, probability = TRUE)
+```
+
+The class ksvm is used to train the model on training set and probability is kept true which will help us later when we need to calculate the predicited probabilities.
+
+## k-Nearest Neighbour Model
+
+K-Nearest Neighbors (KNN) is a simple, non-parametric algorithm that predicts the class of a data point based on the majority class among its 'k' nearest neighbors in the feature space.
+
+```{r}
+k <- 5  
+
+# Build the kNN model
+knn_predictions <- knn(train = train_set[, -which(names(train_set) == "TYPE")],
+                       test = test_set[, -which(names(test_set) == "TYPE")],
+                       cl = train_set$TYPE, 
+                       k = k)
+```
+
+The 'Class' package was used to get predictions using the knn function for the training set on the test. 
+
+## Logistic Regression Model
+
+Logistic Regression is a statistical model that estimates the probability of a binary outcome based on one or more independent variables, using a logistic function.
+
+```{r, warning=FALSE}
+model_logR <- glm(TYPE ~ ., data = train_set, family =binomial)
+summary(model_logR)
+
+step_model_logR <- step(model_logR, direction = 'backward')
+model_logR <- step_model_logR
+
+```
+
+The 'glm' function was used to build the logistic regression model on the training set.
+
+The step() function was used to perform 'backward elimination' on the model and improve its accuracy.
+
+## Model Evaluation
+
+Now we have built our models and we have to start evaluating these models using different methods. These methods are as follows:
+
+1. Evaluation of fit of models with holdout method
+
+2. Evaluation with k-fold cross-validation
+
+3. Tuning of model hyperparameters as available
+
+4. Comparison of models and interpretation
+
+### Evaluation with Holdout Method
+```{r Evaluation with Holdout Method, warning=FALSE}
+
+# For logistic regression
+predictions_logR <- predict(model_logR, newdata = test_set, type = "response")
+predicted_class_logR <- ifelse(predictions_logR > 0.5, 1, 0)
+conf_matrix_logR <- confusionMatrix(as.factor(predicted_class_logR), as.factor(test_set$TYPE))
+accuracy_logR <- conf_matrix_logR$overall['Accuracy']
+precision_logR <- conf_matrix_logR$byClass['Precision']
+F1_logR <- conf_matrix_logR$byClass['F1']
+
+# For SVM
+predictions_svm <- predict(model_svm, newdata = test_set)
+conf_matrix_svm <- confusionMatrix(as.factor(predictions_svm), as.factor(test_set$TYPE))
+accuracy_svm <- conf_matrix_svm$overall['Accuracy']
+precision_svm <- conf_matrix_svm$byClass['Precision']
+F1_svm <- conf_matrix_svm$byClass['F1']
+
+# Assuming you have a variable `knn_predictions` that contains the kNN model predictions
+conf_matrix_knn <- confusionMatrix(as.factor(knn_predictions), as.factor(test_set$TYPE))
+accuracy_knn <- conf_matrix_knn$overall['Accuracy']
+precision_knn <- conf_matrix_knn$byClass['Precision']
+F1_knn <- conf_matrix_knn$byClass['F1']
+```
+
+*Results for Logistic Regression*
+
+```{r, echo=FALSE}
+accuracy_logR
+precision_logR
+F1_logR
+```
+ 
+*Results for SVM*
+
+```{r, echo=FALSE}
+accuracy_svm
+precision_svm
+F1_svm
+```
+
+*Results for kNN*
+
+```{r, echo=FALSE}
+accuracy_knn
+precision_knn
+F1_knn
+```
+
+When comparing the performance metrics of the logistic regression, SVM, and kNN models, the SVM model demonstrates superior performance with the highest accuracy of 89.42% and an impressive precision of 93.18%. Although the F1 score of the SVM model is slightly higher than that of logistic regression, it indicates a balanced performance between precision and recall. The logistic regression model follows closely with an accuracy of 88.46%, precision of 89.36%, and an F1 score of 87.5%, making it a strong contender, especially considering interpretability. The kNN model trails with lower accuracy and precision of 75.96% and 80%, respectively, and an F1 score of 71.91%, suggesting it may be less effective for this dataset. Overall, the SVM model appears to be the most effective model among the three for this particular analysis.
+
+```{r, echo=FALSE}
+model_accuracies <- data.frame(
+    Model = c("Logistic Regression", "SVM", "KNN"),
+    Accuracy = c(accuracy_logR, accuracy_svm, accuracy_knn)
+)
+
+ggplot(model_accuracies, aes(x = Model, y = Accuracy, fill = Model)) +
+    geom_bar(stat = "identity") +
+    labs(title = "Model Accuracies", x = "Model", y = "Accuracy") +
+    theme_minimal()
+```
+
+### Evaluation with k-fold Cross Validation
+```{r Evaluation with k-fold Cross Validation}
+# Common settings for cross-validation
+control <- trainControl(method = "cv", number = 10, savePredictions = TRUE) # 10-fold CV
+oc_df_final$TYPE <- factor(oc_df_final$TYPE, levels = c(0, 1))
+
+# For logistic regression
+set.seed(123)
+x <- model.matrix(TYPE ~ ., data = oc_df_final)[, -1]  
+y <- oc_df_final$TYPE
+cv_logR <- cv.glmnet(x, y, family = "binomial")
+
+# For SVM
+set.seed(123)
+cv_svm <- train(TYPE ~ ., data = oc_df_final, method = "svmRadial", trControl = control) 
+
+# For kNN
+set.seed(123)
+cv_knn <- train(TYPE ~ ., data = oc_df_final, method = "knn", trControl = control)
+
+accuracy_cv_svm <- cv_svm$results$Accuracy 
+
+accuracy_cv_knn <- cv_knn$results$Accuracy
+
+x_test <- model.matrix(TYPE ~ ., data = test_set)[, -1]
+y_test <- test_set$TYPE
+predictions_cv_logR <- predict(cv_logR, newx = x_test, s = "lambda.min", type = "response")
+predicted_class <- ifelse(predictions_cv_logR > 0.5, 1, 0)
+accuracy_cv_logR <- mean(predicted_class == y_test)
+```
+
+*Accuracy of cross validated LogR Model* = `r accuracy_cv_logR`
+
+*Accuracy of cross validated SVM Model* = `r accuracy_cv_svm`
+
+*Accuracy of cross validated kNN Model* = `r accuracy_cv_knn`
+
+In conclusion, the cross validated regression logistic regression model outperforms both the SVM and KNN models in terms of accuracy, achieving a significantly higher score of 95.19%.
+
+```{r, echo=FALSE}
+model_accuracies <- data.frame(
+    Model = c("Logistic Regression", "SVM", "KNN"),
+    Accuracy = c(0.9519231, mean(c(0.8340896, 0.8456863, 0.8658543)), mean(c(0.7680299, 0.7678618, 0.7650887)))
+)
+
+# Create the bar graph
+ggplot(model_accuracies, aes(x = Model, y = Accuracy, fill = Model)) +
+    geom_bar(stat = "identity") +
+    labs(title = "Cross Validated Model Accuracies", x = "Model", y = "Accuracy") +
+    theme_minimal()
+```
+
+### Hyperparameter Tuning
+```{r Hyperparameter Tuning}
+
+train_set$TYPE <- as.factor(train_set$TYPE)
+
+# For SVM, tuning cost and sigma parameters
+set.seed(123)
+tuned_svm <- train(TYPE ~ ., data = train_set, method = "svmRadial", trControl = control, tuneLength = 5)
+predictions_tuned_svm <- predict(tuned_svm, test_set)
+accuracy_tuned_svm <- mean(predictions_tuned_svm == test_set$TYPE)
+
+# For kNN, tuning the number of neighbors
+set.seed(123)
+tuned_knn <- train(TYPE ~ ., data = train_set, method = "knn", trControl = control, tuneLength = 5)
+predictions_tuned_knn <- predict(tuned_knn, test_set)
+accuracy_tuned_knn <- mean(predictions_tuned_knn == test_set$TYPE)
+```
+
+Used the train function from the caret package to tune an SVM with a radial kernel. The tuneLength parameter specifies that 5 different values of each tuning parameter (like cost and sigma). Similarly, tuned a kNN model, exploring 5 different values for the number of neighbors.
+
+Logistic regression is a relatively simple model with fewer hyperparameters compared to models like SVM or kNN. In its basic form, logistic regression does not require hyperparameter tuning. Moreover regularization(L1 and L2) was also not used so there might not be hyperparameters to tune.
+
+For the SVM Model, accuracy was used to select the optimal model using the largest value.
+The final values used for the model were sigma = 0.02835953 and C = 2. Originally the sigma was 0.33 and C was 1.
+
+For the kn kNN Model, accuracy was used to select the optimal model using the largest value.
+The final value used for the model was k = 7. Orginally the k was 10.
+
+### ROC AUC
+
+ROC and AUC are used to assess the performance of classification models by measuring their ability to distinguish between classes, and I am utilizing these metrics to evaluate the effectiveness of my original models.
+
+```{r ROC AUC, message=FALSE}
+
+# ROC AUC SVM
+svm_probabilities <- predict(model_svm, test_set, type = "probabilities")[,2]
+roc_svm <- roc(test_set$TYPE, svm_probabilities)
+auc_svm <- auc(roc_svm)
+plot(roc_svm, col = "blue")
+
+# ROC AUC kNN
+knn_numeric_predictions <- as.numeric(knn_predictions) - 1  # Assuming 1 and 2 are the factor levels
+roc_knn <- roc(test_set$TYPE, knn_numeric_predictions)
+auc_knn <- auc(roc_knn)
+plot(roc_knn, add = TRUE, col = "red")
+
+# ROC AUC LogR
+predicted_probs <- predict(step_model_logR, newdata = test_set, type = "response")
+roc_logR <- roc(test_set$TYPE, predicted_probs)
+auc_logR <- auc(roc_logR)
+plot(roc_logR, add = TRUE, main = "Comparing ROC for SVM, kNN and Logistic Rergression", col = "green")
+legend("bottomright", legend = c("SVM", "kNN", "Logistic Regression"), col = c("blue", "red", "green"), lwd = 2)
+```
+
+Here we can see that the ROC curve for the logistic regression and support vector machine is overlapping where as that for the kNN model is comparatively low. We can look at the AUC values for a more clear understanding.
+
+*LogR* - `r auc_logR`
+
+*SVM* - `r auc_svm`
+
+*kNN* - `r auc_knn`
+
+According to the AUC, the SVM Model is giving good results.
+
+## Model Tuning and Performance Improvement
+
+We begin by tuning a bagging model using the 'randomForest' package, followed by evaluating its performance. Then, we create an ensemble model as a function, combining the predictions from logistic regression, SVM, and kNN models. Finally, we compare the ensemble model with individual models and apply the ensemble to make predictions on new data.
+
+### Bagging
+```{r Bagging, message=FALSE}
+set.seed(123) 
+bagging_model <- randomForest(TYPE ~ ., data = train_set, ntree = 100)
+predictions_bagging <- predict(bagging_model, test_set)
+accuracy_bagging <- mean(predictions_bagging == test_set$TYPE)
+```
+
+The accuracy of the bagging model is `r accuracy_bagging` which is more than our earlier models. 
+
+### Ensemble Model as a Function
+```{r Ensemble Model as a function}
+ensemble_predict <- function(model_funcs, newdata) {
+  predictions_list <- lapply(model_funcs, function(f) f(newdata))
+  predictions_list <- lapply(predictions_list, function(preds) {
+    if(is.factor(preds)) {
+      as.numeric(as.character(preds)) - 1 
+    } else {
+      preds 
+    }
+  })
+  # Combine predictions by taking the mean across models
+  ensemble_predictions <- Reduce("+", predictions_list) / length(predictions_list)
+  return(ensemble_predictions)
+}
+
+# List of model functions that return predicted probabilities
+model_funcs <- list(
+  function(newdata) predict(model_logR, newdata = newdata, type = "response"),
+  function(newdata) predict(model_svm, newdata = newdata, type = "response"), 
+  function(newdata) { 
+    knn_train_data <- train_set[, -which(names(train_set) == "TYPE")]
+    knn_train_labels <- train_set$TYPE
+    knn_test_data <- newdata[, -which(names(newdata) == "TYPE")]
+    as.numeric(knn(knn_train_data, knn_test_data, cl = knn_train_labels, k = 5)) - 1
+  }
+)
+
+# Ensemble predictions
+ensemble_preds <- ensemble_predict(model_funcs, test_set)
+```
+
+The ensemble model averages the predictions from logistic regression, SVM, and kNN models. We also make predictions on the ensemble model was can be used later.
+
+### Comparing Ensemble with Individual Models
+```{r Comparing Ensemble with Individual Models}
+
+ensemble_class_preds <- ifelse(ensemble_preds > 0.5, 1, 0)
+
+ensemble_accuracy <- mean(ensemble_class_preds == test_set$TYPE)
+
+ensemble_conf_matrix <- table(Predicted = ensemble_class_preds, Actual = test_set$TYPE)
+
+```
+
+We now calculate the accuracy of the ensemble model and create a confusion matrix for further analysis. The ensemble accuracy come out to be `r ensemble_accuracy`. And the confusion matrix is shown below:
+
+```{r, echo=FALSE}
+ensemble_conf_matrix
+```
+
+We can see that our model is performing moderately compared to the other models, since its a combination of the three models. We can add different models in the list of model_funcs if we feel like attaining a more comprehensive ensemble model. Now we can use this ensemble model to make predictions on unseen or new data.
+
+```{r Application of Ensemble to Make a Prediction}
+new_data <- data.frame(
+  TYPE = 0,
+  Age = 0.58,
+  HE4 = 0.31,
+  Menopause = 1,
+  ALB = 0.67,
+  NEU = 0.71,
+  `LYM..1` = 0.38,
+  ALP = 0.15,
+  PLT = 0.42,
+  `LYM.` = 0.39,
+  Na = 0.40,
+  IBIL = 0.58,
+  `MONO.` = 0.36,
+  AST = 0.28,
+  `CA72.4` = 0.20,
+  TBIL = 0.25,
+  CEA = 0.09,
+  PCT = 0.71,
+  GLO = 0.32,
+  HGB = 0.51,
+  Ca = 0.91,
+  MCH = 0.21,
+  DBIL = 0.39,
+  TP = 0.40,
+  `GLU.` = 0.72
+)
+  
+ensemble_predictions_new_data <- ensemble_predict(model_funcs, new_data)
+
+ensemble_class_predictions_new_data <- ifelse(ensemble_predictions_new_data > 0.5, "Benign", "Malignant")
+
+```
+
+The ensemble model is applied to make predictions on new data. The resulting class prediction on the ovarian cancer data based on the ensemble model is `r ensemble_class_predictions_new_data`.
+
+## F1 Score and Precision
+
+Accuracy is used when the true positives and true negatives are more important while precision and recall (which form the F1 score) become important when the cost of false positives and false negatives are high.
+Precision is used when we need to be sure that an item labeled as positive is truly positive (minimize false positives).
+F1 score is used when we want to balance the trade-off between precision and recall, especially if there is an uneven class distribution (class imbalance).
+
+```{r, warning=FALSE}
+# cvLogR
+conf_matrix_cv_LogR <- confusionMatrix(as.factor(predicted_class), test_set$TYPE)
+f1_cv_logR <- conf_matrix_cv_LogR$byClass['F1']
+precision_cv_logR <- conf_matrix_cv_LogR$byClass['Precision']
+
+# cvSVM
+cv_svm_predictions <- predict(cv_svm, test_set)
+conf_matrix_cv_svm <- confusionMatrix(as.factor(cv_svm_predictions), as.factor(test_set$TYPE))
+f1_cv_svm <- conf_matrix_cv_svm$byClass['F1']
+precision_cv_svm <- conf_matrix_cv_svm$byClass['Precision']
+
+# cvKNN
+cv_knn_predictions <- predict(cv_knn, test_set)
+conf_matrix_cv_knn <- confusionMatrix(as.factor(cv_knn_predictions), as.factor(test_set$TYPE))
+f1_cv_knn <- conf_matrix_cv_knn$byClass['F1']
+precision_cv_knn <- conf_matrix_cv_knn$byClass['Precision']
+
+# Tuned SVM
+conf_matrix_tuned_svm <- confusionMatrix(as.factor(predictions_tuned_svm), as.factor(test_set$TYPE))
+f1_tuned_svm <- conf_matrix_tuned_svm$byClass['F1']
+precision_tuned_svm <- conf_matrix_tuned_svm$byClass['Precision']
+
+# TUned kNN
+conf_matrix_tuned_knn <- confusionMatrix(as.factor(predictions_tuned_knn), as.factor(test_set$TYPE))
+f1_tuned_knn <- conf_matrix_tuned_knn$byClass['F1']
+precision_tuned_knn <- conf_matrix_tuned_knn$byClass['Precision']
+
+# Bagging
+conf_matrix_bagging <- confusionMatrix(as.factor(predictions_bagging), as.factor(test_set$TYPE))
+f1_bagging <- conf_matrix_bagging$byClass['F1']
+precision_bagging <- conf_matrix_bagging$byClass['Precision']
+
+# Ensemble
+conf_matrix_ensemble <- confusionMatrix(as.factor(ensemble_class_preds), as.factor(test_set$TYPE))
+f1_ensemble <- conf_matrix_ensemble$byClass['F1']
+precision_ensemble <- conf_matrix_ensemble$byClass['Precision']
+```
+
+
+## Conclusion
+
+### Comparing Accuracies of Different Models
+```{r, echo=FALSE}
+model_accuracies <- data.frame(
+    Model = c("Logistic Regression", "SVM", "KNN", "CV LogR", "CV SVM", "CV KNN", "Tuned SVM", "Tuned KNN", "Bagging Model", "Ensemble Model"),
+    Accuracy = c(accuracy_logR, accuracy_svm, accuracy_knn, accuracy_cv_logR, mean(accuracy_cv_svm), mean(accuracy_cv_knn), accuracy_tuned_svm, accuracy_tuned_knn, accuracy_bagging, ensemble_accuracy)
+)
+
+# Create the bar graph
+ggplot(model_accuracies, aes(x = Model, y = Accuracy, fill = Model)) +
+    geom_bar(stat = "identity") +
+    labs(title = " Comparing Models", x = "Model", y = "Accuracy") +
+    coord_flip() +
+    theme_minimal()
+
+```
+Based on the horizontal bar graph provided, which compares various models by their accuracy, we can conclude that the 'CV LogR' model exhibits the highest accuracy among the evaluated models, indicating it may be the best predictor for this dataset. The 'Tuned KNN' shows the lowest accuracy, suggesting it is the least effective model in this comparison. Other models, such as 'Tuned SVM', 'SVM', 'Bagging Model' and 'Logistic Regression', display moderate performance, with accuracies clustered in the middle range. The 'Ensemble Model', which typically combines the strengths of individual models, does not outperform the 'CV LogR' in this case, but it still provides a robust alternative with better performance than some individual models.
+
+### Comparing Precision of Different Models
+```{r, echo=FALSE}
+model_precision <- data.frame(
+    Model = c("Logistic Regression", "SVM", "KNN", "CV LogR", "CV SVM", "CV KNN", "Tuned SVM", "Tuned KNN", "Bagging Model", "Ensemble Model"),
+    precision = c(precision_logR, precision_svm, precision_knn, precision_cv_logR, precision_cv_svm, precision_cv_knn, precision_tuned_svm, precision_tuned_knn, precision_bagging, precision_ensemble)
+)
+
+# Create the bar graph
+ggplot(model_precision, aes(x = Model, y = precision, fill = Model)) +
+    geom_bar(stat = "identity") +
+    labs(title = " Comparing Models", x = "Model", y = "Precision") +
+    coord_flip() +
+    theme_minimal()
+```
+Precision is the ratio of correctly predicted positive observations to the total predicted positive observations. It measures how many of the items labeled as positive are actually positive. We can see that the CV SVM and CV LogR models are giving the highest precision. Followed by tuned SVM, Bagging, SVM and LogR models. The other models are performing moderately compared to the other models.
+
+### Comparing F1 of Different Models
+```{r, echo=FALSE}
+model_f1 <- data.frame(
+    Model = c("Logistic Regression", "SVM", "KNN", "CV LogR", "CV SVM", "CV KNN", "Tuned SVM", "Tuned KNN", "Bagging Model", "Ensemble Model"),
+    f1 = c(F1_logR, F1_svm, F1_knn, f1_cv_logR, f1_cv_svm, f1_cv_knn, f1_tuned_svm, f1_tuned_knn, f1_bagging, f1_ensemble)
+)
+
+# Create the bar graph
+ggplot(model_f1, aes(x = Model, y = f1, fill = Model)) +
+    geom_bar(stat = "identity") +
+    labs(title = " Comparing Models", x = "Model", y = "F1 Score") +
+    coord_flip() +
+    theme_minimal()
+```
+The F1 score is the harmonic mean of precision and recall. It is a way to combine both precision and recall into a single measure that captures both properties. We can see that the CV SVM and CV LogR models have the highest F1 score, followed by the bagging model. The SVM, LogR and ensemble models also have a decent F1 score whereas the kNN models have low F1 scores.
+
+In the final analysis of the classification models used to predict ovarian cancer types, the Cross-Validated Logistic Regression (CV LogR) model outshines the others in terms of accuracy, indicating its superior predictive capabilities for this particular dataset. Precision, which reflects the model's ability to correctly identify positive cases, is also highest in the CV SVM and CV LogR models, suggesting that they are less likely to mistakenly label negative cases as positive.
+
+The F1 score, which balances the trade-off between precision and recall, is also commendable in the CV SVM and CV LogR models, with the Bagging model following closely behind. This indicates that these models not only correctly identify a high number of positive cases but also minimize the number of false positives and false negatives, making them reliable for clinical settings where both types of errors are costly.
+
+While the Ensemble Model, which aggregates predictions from various models, does not surpass the CV LogR, it still demonstrates robustness and a better performance than several standalone models, highlighting the effectiveness of combining model predictions. On the other hand, the kNN-based models show lower performance across all metrics, suggesting that this approach may be less suitable for the complexity of the data or requires more fine-tuning and feature engineering to enhance its predictive power.
+
+Taking into account all the performance metrics — accuracy, precision, and F1 score — the CV LogR model stands out as the best performing model for predicting the type of ovarian cancer in this study. Its high scores across all metrics make it a valuable tool for assisting healthcare professionals in the early and accurate diagnosis of ovarian cancer, potentially leading to better patient outcomes. However, it is also worth considering the use of Ensemble methods or the Bagging model for their potential to reduce variability and error, especially in different or larger datasets where the performance dynamics could change.
